@@ -3,7 +3,15 @@ import path from 'node:path';
 import type { UnifiedPost, PostSegment, PostStatus, BackendStatus } from './types';
 import { extractFirstLine } from './utils';
 
-const DEFAULT_MCP_URL = process.env.THREADS_MCP_URL || 'http://127.0.0.1:3000';
+function getNormalizedMcpUrl(): string {
+  let url = process.env.THREADS_MCP_URL || fallbackEnv.THREADS_MCP_URL || 'http://127.0.0.1:3000';
+  url = url.trim().replace(/\/+$/, '');
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = `https://${url}`;
+  }
+  return url;
+}
+
 const DEFAULT_USER_ID = process.env.DEFAULT_USER_ID || 'chatgpt-user';
 
 /**
@@ -51,7 +59,7 @@ function getEnv(key: string): string | undefined {
  * Checks the status of the Threads MCP backend.
  */
 export async function checkBackendStatus(): Promise<BackendStatus> {
-  const baseUrl = DEFAULT_MCP_URL;
+  const baseUrl = getNormalizedMcpUrl();
   try {
     const res = await fetch(`${baseUrl}/health`, {
       method: 'GET',
@@ -304,7 +312,7 @@ function normalizeAIDraft(item: any): UnifiedPost {
 // ============================================================================
 
 export async function fetchAllPosts(userId: string = DEFAULT_USER_ID): Promise<UnifiedPost[]> {
-  const baseUrl = DEFAULT_MCP_URL;
+  const baseUrl = getNormalizedMcpUrl();
   let scheduledData: any[] = [];
   let historyData: any[] = [];
   let draftsData: any[] = [];
@@ -425,7 +433,7 @@ export async function fetchAllPosts(userId: string = DEFAULT_USER_ID): Promise<U
  * Triggers publication check for due scheduled threads.
  */
 export async function triggerScheduledCron(): Promise<any> {
-  const baseUrl = DEFAULT_MCP_URL;
+  const baseUrl = getNormalizedMcpUrl();
   try {
     const res = await fetch(`${baseUrl}/api/cron/publish-scheduled`, {
       method: 'POST',

@@ -10,7 +10,7 @@ import { LoadingSkeleton } from '@/components/LoadingSkeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import type { UnifiedPost, FeedMetrics, FeedFilter, SortOption, BackendStatus } from '@/lib/types';
-import { Calendar, CheckCircle2, Sparkles, Clock, Layers } from 'lucide-react';
+import { Calendar, CheckCircle2, Sparkles, Clock, Layers, AlertCircle } from 'lucide-react';
 
 export default function PostDraftsPage() {
   const [posts, setPosts] = useState<UnifiedPost[]>([]);
@@ -204,6 +204,31 @@ export default function PostDraftsPage() {
         <div className="space-y-8">
           {isLoading ? (
             <LoadingSkeleton />
+          ) : backendStatus?.online === false && posts.length === 0 ? (
+            <div className="rounded-3xl border border-white/15 bg-neutral-950/80 p-8 text-center space-y-4">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-white/20 bg-neutral-900 text-white">
+                <AlertCircle className="h-6 w-6" />
+              </div>
+              <h3 className="text-base font-semibold text-white">Backend Connection Setup Required</h3>
+              <p className="max-w-md mx-auto text-xs text-neutral-400 leading-relaxed">
+                The interface cannot reach your Threads MCP backend (attempted: <span className="font-mono text-neutral-200">{backendStatus?.apiUrl || 'http://127.0.0.1:3000'}</span>).
+                <br /><br />
+                If you deployed on <strong>Vercel</strong>, add <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">THREADS_MCP_URL</code> or <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">FIREBASE_PROJECT_ID</code> &amp; <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">FIREBASE_API_KEY</code> in your Vercel Project Settings &rarr; Environment Variables.
+                <br /><br />
+                If running locally, ensure your backend server is active on <span className="font-mono text-neutral-200">http://localhost:3000</span>.
+              </p>
+              <div className="pt-2">
+                <button
+                  onClick={() => {
+                    loadPosts(true);
+                    loadBackendStatus();
+                  }}
+                  className="rounded-xl border border-white/20 bg-white text-black px-4 py-2 text-xs font-semibold hover:bg-neutral-200 transition-colors"
+                >
+                  Retry Connection
+                </button>
+              </div>
+            </div>
           ) : displayPosts.length === 0 ? (
             <EmptyState
               filter={currentFilter}
