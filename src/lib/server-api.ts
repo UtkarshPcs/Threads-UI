@@ -242,6 +242,8 @@ function normalizeScheduledThread(item: any): UnifiedPost {
     publishedPostIds: item.publishedPostIds,
     error: item.error,
     rawType: item.type || 'scheduled_thread',
+    topicTag: item.topicTag || postsArray[0]?.topicTag,
+    location: item.location || postsArray[0]?.location,
   };
 }
 
@@ -286,16 +288,25 @@ function normalizePublishingEvent(item: any): UnifiedPost {
     publishedUrls: postsArray.map((p) => p.url).filter(Boolean) as string[],
     publishedPostIds: postsArray.map((p) => p.postId).filter(Boolean) as string[],
     rawType: 'publishing_event',
+    topicTag: item.topicTag,
+    location: item.location,
   };
 }
 
 function normalizeAIDraft(item: any): UnifiedPost {
-  const rawPosts: string[] = Array.isArray(item.posts) ? item.posts : [];
-  const postsArray: PostSegment[] = rawPosts.map((p: string, idx: number) => ({
-    index: idx + 1,
-    text: p,
-    characterCount: p.length,
-  }));
+  const rawPosts: any[] = Array.isArray(item.posts) ? item.posts : [];
+  const postsArray: PostSegment[] = rawPosts.map((p: any, idx: number) => {
+    const text = typeof p === 'string' ? p : (p.text || '');
+    return {
+      index: idx + 1,
+      text,
+      mediaUrl: typeof p === 'object' ? p.mediaUrl : undefined,
+      mediaType: typeof p === 'object' ? p.mediaType : undefined,
+      characterCount: text.length,
+      topicTag: typeof p === 'object' ? p.topicTag : undefined,
+      location: typeof p === 'object' ? p.location : undefined,
+    };
+  });
 
   const primaryContent = postsArray[0]?.text || '';
   const firstLine = extractFirstLine(primaryContent);
@@ -324,6 +335,8 @@ function normalizeAIDraft(item: any): UnifiedPost {
     suggestedReason: item.suggestedReason,
     error: item.error,
     rawType: 'ai_draft',
+    topicTag: item.topicTag || postsArray[0]?.topicTag,
+    location: item.location || postsArray[0]?.location,
   };
 }
 
@@ -466,5 +479,136 @@ export async function triggerScheduledCron(): Promise<any> {
     return { success: false, error: `Cron trigger failed: ${res.status}` };
   } catch (err: any) {
     return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Deletes an individual post from Firebase (supports scheduled, published, and drafts).
+ */
+export async function deletePost(
+  id: string,
+  source?: string,
+  userId: string = DEFAULT_USER_ID
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const baseUrl = getNormalizedMcpUrl();
+  const apiKey = process.env.FIREBASE_API_KEY || fallbackEnv.FIREBASE_API_KEY;
+  const projectId = process.env.FIREBASE_PROJECT_ID || fallbackEnv.FIREBASE_PROJECT_ID || 'threads-log-f1545';
+
+  // 1. Try MCP backend endpoint based on prefix or source
+  try {
+    let endpoint = '/api/scheduled';
+    if (id.startsWith('pub_') || source === 'publishing_history') {
+      endpoint = '/api/history';
+    } else if (id.startsWith('draft_') || source === 'ai_draft') {
+      endpoint = '/api/drafts';
+    }
+
+    const res = await fetch(`${baseUrl}${endpoint}?id=${encodeURIComponent(id)}&userId=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+    });
+
+    if (res.ok) {
+      return { success: true, message: `Post ${id} deleted successfully.` };
+    }
+  } catch {
+    // proceed to fallback below
+  }
+
+  // 2. Direct Firestore fallback
+  if (apiKey) {
+    try {
+      const collectionsToTry = ['scheduled_threads', 'publishing_history', 'ai_drafts', 'logs'];
+      for (const col of collectionsToTry) {
+        const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/users/${encodeURIComponent(userId)}/${encodeURIComponent(col)}/${encodeURIComponent(id)}?key=${encodeURIComponent(apiKey)}`;
+        await fetch(url, { method: 'DELETE' });
+      }
+      return { success: true, message: `Post ${id} deleted directly from Firestore.` };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to delete post directly.' };
+    }
+  }
+
+  return { success: false, error: 'Could not connect to backend or Firestore to delete post.' };
+}
+
+/**
+ * Updates a post's content, scheduled timing, media, or topic tag in Firebase.
+ */
+export async function updatePost(
+  id: string,
+  source: string,
+  payload: {
+    text?: string;
+    posts?: any[];
+    scheduledFor?: string;
+    scheduledTime?: string;
+    timeZone?: string;
+    mediaUrl?: string;
+    topicTag?: string;
+    location?: string;
+  },
+  userId: string = DEFAULT_USER_ID
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  const baseUrl = getNormalizedMcpUrl();
+
+  try {
+    let endpoint = `/api/scheduled/${encodeURIComponent(id)}`;
+    if (id.startsWith('draft_') || source === 'ai_draft') {
+      endpoint = `/api/drafts/${encodeURIComponent(id)}`;
+    }
+
+    const res = await fetch(`${baseUrl}${endpoint}?userId=${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, data };
+    }
+    const errText = await res.text();
+    return { success: false, error: errText };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to update post.' };
+  }
+}
+
+/**
+ * Publishes a scheduled post or draft immediately to Threads.
+ */
+export async function publishPostNow(
+  id: string,
+  source: string,
+  userId: string = DEFAULT_USER_ID
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  const baseUrl = getNormalizedMcpUrl();
+
+  try {
+    let endpoint = `/api/scheduled/${encodeURIComponent(id)}/publish`;
+    let reqBody: any = { id };
+
+    if (id.startsWith('draft_') || source === 'ai_draft') {
+      endpoint = `/api/drafts/${encodeURIComponent(id)}/approve`;
+      reqBody = { publishNow: true };
+    }
+
+    const res = await fetch(`${baseUrl}${endpoint}?userId=${encodeURIComponent(userId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      cache: 'no-store',
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return { success: true, data };
+    }
+    return { success: false, error: data.error || 'Failed to publish post now.' };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Network error while publishing post.' };
   }
 }

@@ -5,12 +5,40 @@ import { Header } from '@/components/Header';
 import { MetricsOverview } from '@/components/MetricsOverview';
 import { StatusFilters } from '@/components/StatusFilters';
 import { PostCard } from '@/components/PostCard';
-import { PostDetailModal } from '@/components/PostDetailModal';
+import { PostEditorModal } from '@/components/PostEditorModal';
+import { DeleteConfirmModal } from '@/components/DeleteConfirmModal';
 import { LoadingSkeleton } from '@/components/LoadingSkeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import type { UnifiedPost, FeedMetrics, FeedFilter, SortOption, BackendStatus } from '@/lib/types';
-import { Calendar, CheckCircle2, Sparkles, Clock, Layers, AlertCircle } from 'lucide-react';
+import { Clock, CheckCircle2, Layers, AlertCircle } from 'lucide-react';
+
+function computeMetrics(postList: UnifiedPost[]): FeedMetrics {
+  const scheduled = postList.filter((p) => p.status === 'scheduled').length;
+  const published = postList.filter((p) => p.status === 'published').length;
+  const publishing = postList.filter((p) => p.status === 'publishing').length;
+  const failed = postList.filter((p) => p.status === 'failed').length;
+  const draft = postList.filter((p) => p.status === 'draft').length;
+
+  const scheduledPosts = postList
+    .filter((p) => p.status === 'scheduled' && p.scheduledFor)
+    .sort((a, b) => new Date(a.scheduledFor!).getTime() - new Date(b.scheduledFor!).getTime());
+
+  const publishedPosts = postList
+    .filter((p) => p.status === 'published' && p.publishedAt)
+    .sort((a, b) => new Date(b.publishedAt!).getTime() - new Date(a.publishedAt!).getTime());
+
+  return {
+    total: postList.length,
+    scheduled,
+    published,
+    publishing,
+    failed,
+    draft,
+    nextScheduledPost: scheduledPosts[0] || null,
+    lastPublishedPost: publishedPosts[0] || null,
+  };
+}
 
 export default function PostDraftsPage() {
   const [posts, setPosts] = useState<UnifiedPost[]>([]);
@@ -35,8 +63,12 @@ export default function PostDraftsPage() {
   const [currentSort, setCurrentSort] = useState<SortOption>('time_desc');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Selected post for detail modal inspection
-  const [inspectingPost, setInspectingPost] = useState<UnifiedPost | null>(null);
+  // Post Editor & Detail Modal State
+  const [editingPost, setEditingPost] = useState<UnifiedPost | null>(null);
+
+  // Post Deletion Confirmation State
+  const [deletingPost, setDeletingPost] = useState<UnifiedPost | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch posts from API route
   const loadPosts = useCallback(async (isSilent = false) => {
@@ -52,10 +84,9 @@ export default function PostDraftsPage() {
         throw new Error(data.error || 'Failed to load posts from Threads pipeline');
       }
 
-      setPosts(data.posts || []);
-      if (data.metrics) {
-        setMetrics(data.metrics);
-      }
+      const fetchedPosts: UnifiedPost[] = data.posts || [];
+      setPosts(fetchedPosts);
+      setMetrics(data.metrics || computeMetrics(fetchedPosts));
     } catch (err: any) {
       setError(err.message || 'Unable to connect to Threads backend');
     } finally {
@@ -83,9 +114,7 @@ export default function PostDraftsPage() {
 
   // Run Cron publishing check
   const handleRunCron = async () => {
-    const res = await fetch('/api/cron', { method: 'POST' });
-    const data = await res.json();
-    // Refresh posts after cron run
+    await fetch('/api/cron', { method: 'POST' });
     await loadPosts(true);
   };
 
@@ -93,6 +122,55 @@ export default function PostDraftsPage() {
     loadPosts();
     loadBackendStatus();
   }, [loadPosts, loadBackendStatus]);
+
+  // Handle post update (e.g. from editor or publish now)
+  const handlePostUpdated = (updated: UnifiedPost) => {
+    setPosts((prev) => {
+      const nextList = prev.map((p) => (p.id === updated.id ? updated : p));
+      setMetrics(computeMetrics(nextList));
+      return nextList;
+    });
+
+    if (editingPost?.id === updated.id) {
+      setEditingPost(updated);
+    }
+  };
+
+  // Handle individual post deletion
+  const handleConfirmDelete = async () => {
+    if (!deletingPost) return;
+
+    setIsDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/posts/${encodeURIComponent(deletingPost.id)}?source=${encodeURIComponent(deletingPost.source)}`,
+        { method: 'DELETE' }
+      );
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to delete post.');
+      }
+
+      // Optimistically update post list and recalculate metrics immediately
+      setPosts((prev) => {
+        const nextList = prev.filter((p) => p.id !== deletingPost.id);
+        setMetrics(computeMetrics(nextList));
+        return nextList;
+      });
+
+      // Close editing modal if deleting currently edited post
+      if (editingPost?.id === deletingPost.id) {
+        setEditingPost(null);
+      }
+
+      setDeletingPost(null);
+    } catch (err: any) {
+      alert(`Delete Error: ${err.message || 'Unable to delete post.'}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // Filtered and Searched Posts
   const displayPosts = useMemo(() => {
@@ -110,7 +188,8 @@ export default function PostDraftsPage() {
         const matchLead = p.primaryContent.toLowerCase().includes(q);
         const matchSegments = p.posts.some((seg) => seg.text.toLowerCase().includes(q));
         const matchId = p.id.toLowerCase().includes(q);
-        return matchLead || matchSegments || matchId;
+        const matchTag = p.topicTag?.toLowerCase().includes(q);
+        return matchLead || matchSegments || matchId || Boolean(matchTag);
       });
     }
 
@@ -134,7 +213,9 @@ export default function PostDraftsPage() {
   const { upcomingQueue, publishedArchive, otherItems } = useMemo(() => {
     const upcoming = displayPosts.filter((p) => p.status === 'scheduled' || p.status === 'publishing');
     const published = displayPosts.filter((p) => p.status === 'published');
-    const others = displayPosts.filter((p) => p.status !== 'scheduled' && p.status !== 'publishing' && p.status !== 'published');
+    const others = displayPosts.filter(
+      (p) => p.status !== 'scheduled' && p.status !== 'publishing' && p.status !== 'published'
+    );
     return { upcomingQueue: upcoming, publishedArchive: published, otherItems: others };
   }, [displayPosts]);
 
@@ -156,16 +237,16 @@ export default function PostDraftsPage() {
         {/* Page Title & Editorial Header */}
         <div className="space-y-1.5">
           <div className="flex items-center space-x-2 text-xs font-mono text-neutral-400">
-            <span>FEATURE 01</span>
+            <span>WORKSPACE</span>
             <span>•</span>
-            <span className="text-neutral-300">CONTENT DRAFTS & QUEUE TRACKER</span>
+            <span className="text-neutral-300">THREADS POST MANAGEMENT &amp; PUBLISHING STUDIO</span>
           </div>
           <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl md:text-4xl">
             Threads Content Pipeline
           </h2>
           <p className="text-xs sm:text-sm text-neutral-400 max-w-2xl leading-relaxed">
-            One unified workspace to track your Threads posts from scheduling to live publication.
-            Inspect full thread chains, verify intended target dates, and open live public posts directly on Threads.
+            One unified workspace to review, edit, schedule, and publish your Threads posts. Inspect live previews,
+            manage attached images via Cloudinary, adjust scheduled timings, and publish instantly.
           </p>
         </div>
 
@@ -211,11 +292,13 @@ export default function PostDraftsPage() {
               </div>
               <h3 className="text-base font-semibold text-white">Backend Connection Setup Required</h3>
               <p className="max-w-md mx-auto text-xs text-neutral-400 leading-relaxed">
-                The interface cannot reach your Threads MCP backend (attempted: <span className="font-mono text-neutral-200">{backendStatus?.apiUrl || 'http://127.0.0.1:3000'}</span>).
-                <br /><br />
-                If you deployed on <strong>Vercel</strong>, add <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">THREADS_MCP_URL</code> or <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">FIREBASE_PROJECT_ID</code> &amp; <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">FIREBASE_API_KEY</code> in your Vercel Project Settings &rarr; Environment Variables.
-                <br /><br />
-                If running locally, ensure your backend server is active on <span className="font-mono text-neutral-200">http://localhost:3000</span>.
+                The interface cannot reach your Threads MCP backend (attempted:{' '}
+                <span className="font-mono text-neutral-200">{backendStatus?.apiUrl || 'http://127.0.0.1:3000'}</span>).
+                <br />
+                <br />
+                If deployed on <strong>Vercel</strong>, ensure <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">THREADS_MCP_URL</code> or{' '}
+                <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">FIREBASE_PROJECT_ID</code> &amp;{' '}
+                <code className="text-white bg-neutral-900 px-1 py-0.5 rounded">FIREBASE_API_KEY</code> are configured.
               </p>
               <div className="pt-2">
                 <button
@@ -261,7 +344,8 @@ export default function PostDraftsPage() {
                       <PostCard
                         key={post.id}
                         post={post}
-                        onInspect={(p) => setInspectingPost(p)}
+                        onInspect={(p) => setEditingPost(p)}
+                        onRequestDelete={(p) => setDeletingPost(p)}
                       />
                     ))}
                   </div>
@@ -288,7 +372,8 @@ export default function PostDraftsPage() {
                       <PostCard
                         key={post.id}
                         post={post}
-                        onInspect={(p) => setInspectingPost(p)}
+                        onInspect={(p) => setEditingPost(p)}
+                        onRequestDelete={(p) => setDeletingPost(p)}
                       />
                     ))}
                   </div>
@@ -302,7 +387,7 @@ export default function PostDraftsPage() {
                     <div className="flex items-center space-x-2">
                       <Layers className="h-4 w-4 text-neutral-400" />
                       <h3 className="text-sm font-semibold tracking-tight text-white uppercase font-mono">
-                        Drafts & Review ({otherItems.length})
+                        Drafts &amp; Review ({otherItems.length})
                       </h3>
                     </div>
                   </div>
@@ -312,7 +397,8 @@ export default function PostDraftsPage() {
                       <PostCard
                         key={post.id}
                         post={post}
-                        onInspect={(p) => setInspectingPost(p)}
+                        onInspect={(p) => setEditingPost(p)}
+                        onRequestDelete={(p) => setDeletingPost(p)}
                       />
                     ))}
                   </div>
@@ -326,7 +412,8 @@ export default function PostDraftsPage() {
                 <PostCard
                   key={post.id}
                   post={post}
-                  onInspect={(p) => setInspectingPost(p)}
+                  onInspect={(p) => setEditingPost(p)}
+                  onRequestDelete={(p) => setDeletingPost(p)}
                 />
               ))}
             </div>
@@ -334,17 +421,37 @@ export default function PostDraftsPage() {
         </div>
       </main>
 
-      {/* Post Detail Inspection Modal */}
-      <PostDetailModal
-        post={inspectingPost}
-        onClose={() => setInspectingPost(null)}
+      {/* Post Review, Editor, & Device Preview Modal */}
+      <PostEditorModal
+        post={editingPost}
+        isOpen={Boolean(editingPost)}
+        onClose={() => setEditingPost(null)}
+        onPostUpdated={handlePostUpdated}
+        onPostDeleted={(id) => {
+          setPosts((prev) => {
+            const next = prev.filter((p) => p.id !== id);
+            setMetrics(computeMetrics(next));
+            return next;
+          });
+          setEditingPost(null);
+        }}
+        onRequestDelete={(post) => setDeletingPost(post)}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        post={deletingPost}
+        isOpen={Boolean(deletingPost)}
+        onClose={() => setDeletingPost(null)}
+        onConfirm={handleConfirmDelete}
+        isDeleting={isDeleting}
       />
 
       {/* Minimal Editorial Footer */}
       <footer className="mt-auto border-t border-white/[0.06] bg-neutral-950/60 py-6 text-center text-xs text-neutral-500">
         <div className="mx-auto max-w-7xl px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>Threads MCP Studio • Post Drafts Tracking System</span>
-          <span className="font-mono text-[11px]">Meta Threads API Integration</span>
+          <span>Threads Content Pipeline • Studio Edition</span>
+          <span className="font-mono text-[11px]">Direct Meta Threads API Integration</span>
         </div>
       </footer>
     </div>

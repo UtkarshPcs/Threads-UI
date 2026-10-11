@@ -9,6 +9,8 @@ export interface PostSegment {
   url?: string;
   status?: string;
   characterCount: number;
+  topicTag?: string;
+  location?: string;
 }
 
 export interface UnifiedPost {
@@ -40,6 +42,10 @@ export interface UnifiedPost {
   sources?: string[];
   suggestedReason?: string;
   rawType?: string;
+  topicTag?: string;
+  location?: string;
+  mediaUrls?: string[];
+  mediaUrl?: string;
 }
 
 export type FeedFilter = 'all' | 'scheduled' | 'published' | 'publishing' | 'failed' | 'draft';

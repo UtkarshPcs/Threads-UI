@@ -11,8 +11,10 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
-  FileText,
-  Share2,
+  Trash2,
+  Tag,
+  ImageIcon,
+  Edit3,
 } from 'lucide-react';
 import type { UnifiedPost } from '@/lib/types';
 import { formatExactDateTime, formatRelativeTime, getStatusMeta, copyText } from '@/lib/utils';
@@ -20,14 +22,18 @@ import { formatExactDateTime, formatRelativeTime, getStatusMeta, copyText } from
 interface PostCardProps {
   post: UnifiedPost;
   onInspect: (post: UnifiedPost) => void;
+  onRequestDelete: (post: UnifiedPost) => void;
 }
 
-export function PostCard({ post, onInspect }: PostCardProps) {
+export function PostCard({ post, onInspect, onRequestDelete }: PostCardProps) {
   const [isCopied, setIsCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const statusMeta = getStatusMeta(post.status);
+  const hasMedia = Boolean(post.posts[0]?.mediaUrl || post.mediaUrls?.[0]);
+  const mediaUrl = post.posts[0]?.mediaUrl || post.mediaUrls?.[0];
+  const topicTag = post.topicTag || post.posts[0]?.topicTag;
 
   // Copy primary or public URL
   const handleCopyLink = async (e: React.MouseEvent) => {
@@ -90,6 +96,24 @@ export function PostCard({ post, onInspect }: PostCardProps) {
             </span>
           )}
 
+          {/* Topic Tag Pill */}
+          {topicTag && (
+            <span className="flex items-center space-x-1 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] font-mono text-neutral-300">
+              <Tag className="h-3 w-3 text-neutral-400" />
+              <span>#{topicTag}</span>
+            </span>
+          )}
+
+          {/* Media Indicator */}
+          {hasMedia && (
+            <span
+              title="Has attached media"
+              className="flex items-center space-x-1 rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-neutral-300"
+            >
+              <ImageIcon className="h-3 w-3 text-neutral-300" />
+            </span>
+          )}
+
           {/* Copy Action */}
           <button
             onClick={handleCopyLink}
@@ -112,6 +136,18 @@ export function PostCard({ post, onInspect }: PostCardProps) {
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
           )}
+
+          {/* Delete Action Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRequestDelete(post);
+            }}
+            title="Delete post"
+            className="rounded-lg border border-white/[0.08] bg-neutral-900/60 p-1.5 text-neutral-400 transition-colors hover:border-white/30 hover:bg-neutral-800 hover:text-white"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
@@ -121,6 +157,20 @@ export function PostCard({ post, onInspect }: PostCardProps) {
         <div className="text-neutral-200 text-sm sm:text-base leading-relaxed whitespace-pre-wrap selection:bg-white selection:text-black">
           {post.primaryContent}
         </div>
+
+        {/* Media Thumbnail Preview */}
+        {hasMedia && mediaUrl && (
+          <div className="pt-1">
+            <div className="relative inline-block max-w-sm rounded-xl overflow-hidden border border-white/10 bg-neutral-950">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={mediaUrl}
+                alt="Post media"
+                className="max-h-48 w-auto object-cover rounded-xl"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Multi-Post Chain Accordion Preview */}
         {post.isThread && post.posts.length > 1 && (
@@ -244,9 +294,10 @@ export function PostCard({ post, onInspect }: PostCardProps) {
 
           <button
             onClick={() => onInspect(post)}
-            className="rounded-full border border-white/10 bg-neutral-900/80 px-2.5 py-1 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-white"
+            className="inline-flex items-center space-x-1 rounded-full border border-white/10 bg-neutral-900/80 px-3 py-1 text-xs text-neutral-200 transition-colors hover:border-white/30 hover:text-white"
           >
-            Inspect Draft
+            <Edit3 className="h-3 w-3 text-neutral-400" />
+            <span>Review &amp; Edit</span>
           </button>
         </div>
       </div>
