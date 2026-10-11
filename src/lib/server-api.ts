@@ -4,12 +4,32 @@ import type { UnifiedPost, PostSegment, PostStatus, BackendStatus } from './type
 import { extractFirstLine } from './utils';
 
 function getNormalizedMcpUrl(): string {
-  let url = process.env.THREADS_MCP_URL || fallbackEnv.THREADS_MCP_URL || 'http://127.0.0.1:3000';
-  url = url.trim().replace(/\/+$/, '');
+  const raw =
+    process.env.THREADS_MCP_URL ||
+    process.env.NEXT_PUBLIC_THREADS_MCP_URL ||
+    process.env.MCP_URL ||
+    process.env.OFFICIAL_MCP_URL ||
+    fallbackEnv.THREADS_MCP_URL ||
+    (process.env.VERCEL ? 'https://threads-log.vercel.app' : 'http://127.0.0.1:3000');
+
+  let url = raw.trim();
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     url = `https://${url}`;
   }
-  return url;
+
+  try {
+    const parsed = new URL(url);
+    let cleanPath = parsed.pathname.replace(/\/+$/, '');
+    if (cleanPath.endsWith('/mcp')) {
+      cleanPath = cleanPath.slice(0, -4);
+    }
+    if (cleanPath.endsWith('/api')) {
+      cleanPath = cleanPath.slice(0, -4);
+    }
+    return `${parsed.protocol}//${parsed.host}${cleanPath}`;
+  } catch {
+    return url.replace(/\/+$/, '').replace(/\/mcp$/, '');
+  }
 }
 
 const DEFAULT_USER_ID = process.env.DEFAULT_USER_ID || 'chatgpt-user';
